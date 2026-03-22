@@ -21,6 +21,7 @@ Assume it is a Flask app called “certgen”. The templates below work on Ubunt
 └── data/                   # read-write (SQLite)
 
 /var/log/certgen/           # read-write logs
+/run/certgen/               # runtime socket + session dir
 
 /home/certgen/.ssh/         # SSH keys
 ```
@@ -28,6 +29,7 @@ Assume it is a Flask app called “certgen”. The templates below work on Ubunt
 ## nginx
 
 nginx config should have a port 80 section redirecting to ssl
+
 
 ```
 server {
@@ -54,11 +56,11 @@ server {
     proxy_set_header X-Forwarded-Proto $scheme;
    
     location / {
-        proxy_pass http://127.0.0.1:8000;
+        proxy_pass http://unix:/run/certgen/certgen.sock;
     }
     # API (Long running tasks)
     location /api/ {
-        proxy_pass http://127.0.0.1:8000;
+        proxy_pass http://unix:/run/certgen/certgen.sock;
         
         # Only override what is different
         proxy_read_timeout 180s;
@@ -95,12 +97,12 @@ StandardOutput=append:/var/log/certgen/certgen.log
 StandardError=append:/var/log/certgen/error.log
 
 # --- Execution ---
-ExecStart=/opt/certgen/venv/bin/gunicorn --bind 127.0.0.1:5001 --workers 4 --threads 2 --timeout 30 app:app
+ExecStart=/opt/certgen/venv/bin/gunicorn --bind unix:/run/certgen/certgen.sock --umask 0117 --workers 4 --threads 2 --timeout 30 app:app
 
 # --- Runtime Directories ---
-# Automatically creates /run/certgen/sessions owned by the User
-RuntimeDirectory=certgen/sessions
-RuntimeDirectoryMode=0700
+# Automatically creates /run/certgen and /run/certgen/sessions owned by the User
+RuntimeDirectory=certgen certgen/sessions
+RuntimeDirectoryMode=0750
 
 # --- Stability & Resource Control ---
 Restart=always
@@ -125,10 +127,29 @@ ProtectControlGroups=true
 # --- Write Permissions ---
 # Because ProtectSystem=strict is on, you must explicitly whitelist write targets
 # Add your SQLite DB path here if applicable
-ReadWritePaths=/opt/certgen/data /run/certgen/sessions
+ReadWritePaths=/opt/certgen/data /run/certgen /run/certgen/sessions
 
 [Install]
 WantedBy=multi-user.target
 ```
+
+Use a Unix domain socket, not a localhost TCP port. If the backend listens on
+`127.0.0.1`, any co-located process can reach it directly, including via SSRF
+in another app. A Unix socket lets the kernel enforce access via filesystem
+permissions, so only nginx can connect. The usual pattern is:
+
+* socket path: `/run/certgen/certgen.sock`
+* socket owner/group: `certgen:certgen`
+* socket mode: `0660` (from `--umask 0117`)
+* runtime dir: `/run/certgen` mode `0750`
+* add nginx user (`www-data`) to the `certgen` group
+
+```bash
+usermod -aG certgen www-data
+systemctl restart certgen nginx
+```
+
+Do not run the app as `www-data`, and do not expose the backend on a localhost
+TCP port if co-located apps are in scope for SSRF.
 
 ## Database backup
