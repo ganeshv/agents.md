@@ -67,6 +67,7 @@ Note the lack of validation of arguments, existence of userlist file - failure b
   * Use flask-session and a tmpfs like /run for session data
   * Use Talisman, Flask-WTF, enforce https for production, configure CSP with nonces for inline scripts and styles
   * Use gunicorn, nginx reverse proxy for production deployment
+* For simple service liveness checks, prefer an unauthenticated `/ping` endpoint that returns fixed `200 OK` with a small fixed plain-text body like `ok\n`.
 
 ## Testing
 
